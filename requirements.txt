@@ -1,0 +1,16 @@
+
+# Core dependencies (required)
+numpy>=1.23
+matplotlib>=3.5
+pandas>=1.5
+pytest>=7.0
+plotly
+dash
+
+# GPU dependencies (optional)
+# Install a CuPy wheel that matches your CUDA runtime, e.g.:
+#   pip install cupy-cuda13x
+# For Numba CUDA kernels, conda/mamba is recommended on Windows:
+#   conda install -c conda-forge numba cudatoolkit
+# cupy-cuda13x
+# numba

@@ -1,0 +1,36 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual env
+.venv/
+env/
+venv/
+
+# Pytest cache
+.pytest_cache/
+
+# Results/outputs
+benchmarks/results.csv
+benchmarks/results_*.csv
+benchmarks/results*.csv
+benchmarks/dashboard_snapshot.png
+
+# Temporary and editor files
+.tmp/
+.vscode/
+.idea/
+
+# Logs and temp
+*.log
+*.tmp
+
+# Packaging / build
+dist/
+build/
+*.egg-info/
+
+# OS files
+.DS_Store
+Thumbs.db

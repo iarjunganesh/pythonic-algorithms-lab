@@ -1,0 +1,55 @@
+/* Dark-mode tweaks for react-select used by dcc.Dropdown and related inputs */
+
+/* When the page-container has class 'dark', style select controls */
+.dark .Select-control,
+.dark .Select,
+.dark .Select__control,
+.dark .Select-placeholder,
+.dark .Select-value,
+.dark .Select-input,
+.dark .Select-value-label,
+.dark .VirtualizedSelect {
+  background-color: #111111 !important;
+  color: #ffffff !important;
+  border-color: #333 !important;
+}
+
+.dark .Select-placeholder,
+.dark .Select--single > .Select-control .Select-value {
+  color: #bbbbbb !important;
+}
+
+.dark .Select-menu-outer .Select-option,
+.dark .Select-option,
+.dark .VirtualizedSelectOption {
+  background-color: #111111 !important;
+  color: #ffffff !important;
+}
+
+.dark .Select-arrow-zone,
+.dark .Select-control .Select-arrow-zone {
+  color: #ffffff !important;
+}
+
+.dark .Select-input input {
+  background-color: transparent !important;
+  color: #ffffff !important;
+}
+
+/* Radio items and labels inside dark container */
+.dark label,
+.dark .radio {
+  color: #ffffff !important;
+}
+
+/* Ensure Plotly annotations/legend text inherits a lighter color inside dark container */
+.dark .js-plotly-plot .plotly .main-svg {
+  color: #ffffff !important;
+}
+
+/* Fallback: prefer inherited colors inside dark container */
+.dark * {
+  color: inherit;
+}
+
+/* (algo_label removed - label was moved into dropdown UI) */
