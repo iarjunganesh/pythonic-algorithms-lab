@@ -6,6 +6,7 @@ pandas>=1.5
 pytest>=7.0
 plotly
 dash
+ruff>=0.4
 
 # GPU dependencies (optional)
 # Install a CuPy wheel that matches your CUDA runtime, e.g.:

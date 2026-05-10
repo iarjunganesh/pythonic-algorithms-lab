@@ -1,6 +1,5 @@
 try:
     import cupy as cp
-    import cupyx
     from cupyx.scipy.sparse import csr_matrix
 except Exception:
     cp = None

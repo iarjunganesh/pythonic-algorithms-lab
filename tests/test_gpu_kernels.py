@@ -153,6 +153,134 @@ def test_radix_cupy_correctness():
     assert out == sorted(arr)
 
 
+# ── Tiled matmul ──────────────────────────────────────────────────────────────
+
+def test_matmul_tiled_matches_numpy():
+    mod = _load("algorithms.gpu.kernels.numba_kernels")
+    A = np.random.rand(32, 32).astype(np.float32)
+    B = np.random.rand(32, 32).astype(np.float32)
+    try:
+        C = mod.matmul_tiled(A, B)
+    except RuntimeError:
+        pytest.skip("matmul_tiled requires GPU runtime")
+    assert np.allclose(C, A.dot(B), atol=1e-3)
+
+
+def test_matmul_tiled_non_square():
+    mod = _load("algorithms.gpu.kernels.numba_kernels")
+    A = np.random.rand(16, 24).astype(np.float32)
+    B = np.random.rand(24, 8).astype(np.float32)
+    try:
+        C = mod.matmul_tiled(A, B)
+    except RuntimeError:
+        pytest.skip("matmul_tiled requires GPU runtime")
+    assert C.shape == (16, 8)
+    assert np.allclose(C, A.dot(B), atol=1e-3)
+
+
+def test_matmul_tiled_identity():
+    mod = _load("algorithms.gpu.kernels.numba_kernels")
+    A = np.eye(16, dtype=np.float32)
+    B = np.random.rand(16, 16).astype(np.float32)
+    try:
+        C = mod.matmul_tiled(A, B)
+    except RuntimeError:
+        pytest.skip("matmul_tiled requires GPU runtime")
+    assert np.allclose(C, B, atol=1e-4)
+
+
+def test_matmul_tiled_shape_mismatch_raises():
+    mod = _load("algorithms.gpu.kernels.numba_kernels")
+    A = np.ones((4, 3), dtype=np.float32)
+    B = np.ones((5, 4), dtype=np.float32)
+    with pytest.raises(ValueError):
+        mod.matmul_tiled(A, B)
+
+
+# ── GPU BFS frontier ──────────────────────────────────────────────────────────
+
+def test_bfs_frontier_all_reachable():
+    mod = _load("algorithms.gpu.graphs.bfs_frontier")
+    # simple chain: 0-1-2-3-4
+    n = 5
+    adj = {0: [1], 1: [0, 2], 2: [1, 3], 3: [2, 4], 4: [3]}
+    row_ptr, col_idx = mod.adj_to_csr(n, adj)
+    levels = mod.bfs_frontier(n, row_ptr, col_idx, source=0)
+    assert list(levels) == [0, 1, 2, 3, 4]
+
+
+def test_bfs_frontier_star_graph():
+    mod = _load("algorithms.gpu.graphs.bfs_frontier")
+    # star: 0 connected to 1,2,3,4
+    n = 5
+    adj = {0: [1, 2, 3, 4], 1: [0], 2: [0], 3: [0], 4: [0]}
+    row_ptr, col_idx = mod.adj_to_csr(n, adj)
+    levels = mod.bfs_frontier(n, row_ptr, col_idx, source=0)
+    assert levels[0] == 0
+    assert all(levels[i] == 1 for i in range(1, 5))
+
+
+def test_bfs_frontier_disconnected():
+    mod = _load("algorithms.gpu.graphs.bfs_frontier")
+    # two disconnected edges: 0-1 and 2-3
+    n = 4
+    adj = {0: [1], 1: [0], 2: [3], 3: [2]}
+    row_ptr, col_idx = mod.adj_to_csr(n, adj)
+    levels = mod.bfs_frontier(n, row_ptr, col_idx, source=0)
+    assert levels[0] == 0
+    assert levels[1] == 1
+    assert levels[2] == -1
+    assert levels[3] == -1
+
+
+def test_bfs_frontier_matches_cpu_bfs():
+    """GPU and CPU BFS frontiers agree on a random connected graph."""
+    mod = _load("algorithms.gpu.graphs.bfs_frontier")
+    cpu_bfs = _load("algorithms.cpu.graphs.bfs")
+    rng = np.random.default_rng(42)
+    n = 20
+    adj = {i: [] for i in range(n)}
+    # build a random connected graph
+    for u in range(1, n):
+        v = int(rng.integers(0, u))
+        adj[u].append(v)
+        adj[v].append(u)
+    # extra random edges
+    for _ in range(n):
+        u, v = int(rng.integers(0, n)), int(rng.integers(0, n))
+        if u != v and v not in adj[u]:
+            adj[u].append(v)
+            adj[v].append(u)
+
+    # GPU BFS levels
+    row_ptr, col_idx = mod.adj_to_csr(n, adj)
+    gpu_levels = mod.bfs_frontier(n, row_ptr, col_idx, source=0)
+
+    # CPU BFS levels via reference implementation
+    order = cpu_bfs.bfs(adj, 0)
+    cpu_levels = np.full(n, -1, dtype=np.int32)
+    level_map = {}
+    for node in order:
+        if node == 0:
+            level_map[node] = 0
+        else:
+            level_map[node] = min(
+                (level_map[nb] + 1 for nb in adj.get(node, []) if nb in level_map),
+                default=-1,
+            )
+        cpu_levels[node] = level_map[node]
+
+    assert np.array_equal(gpu_levels, cpu_levels)
+
+
+def test_adj_to_csr_shape():
+    mod = _load("algorithms.gpu.graphs.bfs_frontier")
+    adj = {0: [1, 2], 1: [0], 2: [0]}
+    row_ptr, col_idx = mod.adj_to_csr(3, adj)
+    assert len(row_ptr) == 4   # n + 1
+    assert len(col_idx) == 4   # total edges: 2+1+1
+
+
 if __name__ == "__main__":
     test_fft_length()
     test_fft_matches_numpy()
@@ -168,4 +296,13 @@ if __name__ == "__main__":
     test_sparse_ops_spmv()
     test_parallel_sort_correctness()
     test_radix_cupy_correctness()
+    test_matmul_tiled_matches_numpy()
+    test_matmul_tiled_non_square()
+    test_matmul_tiled_identity()
+    test_matmul_tiled_shape_mismatch_raises()
+    test_bfs_frontier_all_reachable()
+    test_bfs_frontier_star_graph()
+    test_bfs_frontier_disconnected()
+    test_bfs_frontier_matches_cpu_bfs()
+    test_adj_to_csr_shape()
     print("GPU kernel tests passed (CPU fallbacks used where GPU unavailable)")

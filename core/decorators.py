@@ -39,11 +39,21 @@ def benchmark(func: Callable = None, *, include_memory: bool = False, repeat: in
                 mem_peaks.append(peak)
             times.append(t1 - t0)
 
+        sorted_times = sorted(times)
+        n = len(sorted_times)
+
+        def _pct(p):
+            idx = (p / 100) * (n - 1)
+            lo, hi = int(idx), min(int(idx) + 1, n - 1)
+            return sorted_times[lo] + (idx - lo) * (sorted_times[hi] - sorted_times[lo])
+
         metrics: Dict[str, Any] = {
             "runs": len(times),
             "min": min(times),
             "max": max(times),
             "mean": sum(times) / len(times),
+            "p50": _pct(50),
+            "p95": _pct(95),
             "times": times,
         }
         if include_memory:

@@ -1,5 +1,9 @@
 # Pythonic-Algorithms-Lab
 
+![CI](https://github.com/iarjunganesh/pythonic-algorithms-lab/actions/workflows/ci.yml/badge.svg)
+![Python](https://img.shields.io/badge/python-3.14-blue)
+![Tests](https://img.shields.io/badge/tests-118%20passing-brightgreen)
+
 Comprehensive laboratory for algorithm implementations, Big-O exploration, and CPU vs GPU benchmarking.
 
 ## Repository layout
@@ -34,12 +38,12 @@ assets/                     # Static assets (dashboard CSS theme)
 benchmarks/                 # CLI benchmark runner, CSV output, interactive Dash app
 core/                       # Shared utilities: timer decorator, data generators
 docs/                       # Algorithm complexity reference and GPU setup guide
-tests/                      # pytest test suite (109 tests)
+tests/                      # pytest test suite (118 tests)
 ```
 
 ## Supported platforms
 
-- Python 3.10–3.14 on Windows / Linux / macOS (developed and tested on 3.14)
+- Python 3.14 on Windows / Linux / macOS
 - Optional GPU: NVIDIA GPU with CUDA toolkit (targeting CUDA 13.x). All GPU modules include CPU fallbacks.
 
 ## Quick start
@@ -123,8 +127,9 @@ python benchmarks/dashboard_app.py --csv benchmarks/results_full.csv
 | Backtracking | N-Queens |
 | Greedy | Coin Change |
 | GPU — Sorting | CuPy Sort, Parallel Sort (CuPy w/ CPU fallback), Radix Sort (CuPy) |
-| GPU — Math | FFT, Convolution, Vec Add (Numba), Matmul (Numba + CuPy), Prefix Scan, Sum Reduce, Max Reduce |
+| GPU — Math | FFT, Convolution, Vec Add (Numba), Matmul naive + tiled (Numba CUDA shared memory), Matmul (CuPy), Prefix Scan, Sum/Max/Min/Mean Reduce |
 | GPU — Sparse | SpMV CSR (Numba CUDA → CuPy → CPU fallback) |
+| GPU — Graphs | BFS frontier expansion (CuPy SpMV level-sync → CPU fallback) |
 
 ## Documentation
 
@@ -132,5 +137,35 @@ python benchmarks/dashboard_app.py --csv benchmarks/results_full.csv
 |---|---|
 | `docs/algorithm-complexity.md` | Big-O time and space reference for all implemented algorithms |
 | `docs/gpu-kernels.md` | GPU toolchain installation, verification, best practices |
+| `docs/next-iteration-scaffold.md` | Iteration planning scaffold, benchmark protocol, acceptance gates, and report template |
 | `benchmarks/README.md` | Benchmark runner usage, CSV workflow, dashboard guide |
+
+## Key findings
+
+Measured on this machine (CPU-only fallback paths where no GPU is available). Run your own sweep to get GPU numbers.
+
+| Algorithm | GPU wins at n ≈ | Peak speedup (n=100k) | Note |
+|---|---|---|---|
+| Radix sort (CuPy) | 1 000 | **16.6×** | Monotonically improves with n |
+| SpMV CSR | 1 000 | **1.1×** | Stable; transfer overhead limits gain |
+| FFT | 100 000 | **1.3×** | GPU slower than NumPy below n=50k |
+| matmul | 100 000 | **1.0×** | Break-even; tiled kernel needed for dense gains |
+| BFS (frontier) | never (at these sizes) | 0.5× | Graph irregularity kills GPU parallelism |
+| max/sum reduce | never (at these sizes) | 0.9× | NumPy BLAS baseline is hard to beat |
+
+> FFT anomaly at n=5 000 (0.16× = 6× slower): CuPy warmup + PCIe transfer overhead dominates small arrays.
+> Radix is the portfolio headline: sustained superlinear scaling on GPU.
+
+Generate the interactive speedup chart:
+```powershell
+python benchmarks/dashboard_app.py --csv benchmarks/results_full.csv
+# Open http://127.0.0.1:8050 → "CPU vs GPU Speedup" tab
+```
+
+Regenerate static plots after a new benchmark run:
+```powershell
+python benchmarks/plot_results.py --csv benchmarks/results_full.csv --out assets/plots
+```
+
+![GPU Speedup](assets/plots/speedup_all.png)
 

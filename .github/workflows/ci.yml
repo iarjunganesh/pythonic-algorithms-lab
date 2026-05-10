@@ -12,45 +12,49 @@ on:
         required: false
         default: 'false'
 
+env:
+  PYTHON_VERSION: '3.14'
+
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install ruff
+        run: pip install ruff
+      - name: Lint
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run tests
-        run: |
-          python -m pytest -q || true
-          # Some tests can be executed directly if pytest isn't available in runner.
-          # Fallback to running individual test scripts to improve visibility.
-          python tests/test_sorting.py || true
-          python tests/test_data_structures.py || true
-          python tests/test_sorting_extended.py || true
-          python tests/test_searching.py || true
-          python tests/test_strings.py || true
-          python tests/test_geometry.py || true
+        run: python -m pytest -q
 
   gpu-smoke:
-    # This job runs only when the workflow is manually dispatched with run_gpu=true
+    # Runs only when manually dispatched with run_gpu=true
     if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.run_gpu == 'true' }}
     runs-on: [self-hosted, gpu]
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: ${{ env.PYTHON_VERSION }}
       - name: Install dependencies (GPU)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
       - name: Run GPU smoke tests
-        run: |
-          # These tests are safe and use CPU fallbacks if GPU libs are missing.
-          python tests/test_gpu_kernels.py || true
-          python tests/test_numba_spmv.py || true
+        run: python -m pytest tests/test_gpu_kernels.py tests/test_numba_spmv.py tests/test_radix_cupy.py -v

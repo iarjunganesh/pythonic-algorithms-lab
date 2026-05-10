@@ -6,9 +6,64 @@ Usage examples:
     python benchmarks/run_benchmarks.py --merge-inputs "benchmarks/results_*.csv" --merge-out benchmarks/results_combined.csv
 """
 import argparse
+import atexit
 import csv
 import glob
+import os
+import signal
 from pathlib import Path
+import random
+import sys
+
+# ---------------------------------------------------------------------------
+# Single-instance lock — prevents accidental duplicate benchmark runs.
+# CuPy/Numba spawn a *worker* child process on Windows; that child will NOT
+# run __main__, so the lock is only acquired by the true top-level invocation.
+# ---------------------------------------------------------------------------
+_LOCK_PATH = Path(__file__).parent / ".run_benchmarks.lock"
+_LOCK_FD: int | None = None
+
+
+def _acquire_lock() -> bool:
+    """Try to acquire the lock file. Returns False if already locked."""
+    global _LOCK_FD
+    try:
+        _LOCK_FD = os.open(str(_LOCK_PATH), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+        _LOCK_PATH.write_text(str(os.getpid()))
+        return True
+    except FileExistsError:
+        # Check if the PID in the lock is actually alive
+        try:
+            pid = int(_LOCK_PATH.read_text().strip())
+            os.kill(pid, 0)   # signal 0 = check existence only
+            return False       # process is alive — real duplicate
+        except (ProcessLookupError, PermissionError, ValueError, OSError):
+            # Stale lock from a crashed run — remove and acquire
+            _LOCK_PATH.unlink(missing_ok=True)
+            return _acquire_lock()
+
+
+def _release_lock(*_):
+    global _LOCK_FD
+    if _LOCK_FD is not None:
+        try:
+            os.close(_LOCK_FD)
+        except OSError:
+            pass
+        _LOCK_FD = None
+    _LOCK_PATH.unlink(missing_ok=True)
+
+
+atexit.register(_release_lock)
+for _sig in (signal.SIGINT, signal.SIGTERM):
+    try:
+        signal.signal(_sig, _release_lock)
+    except (OSError, ValueError):
+        pass
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from core.data_gen import random_list
 from core.decorators import benchmark
@@ -89,10 +144,12 @@ except Exception:
 
 try:
     from algorithms.gpu.kernels.numba_kernels import vec_add as gpu_vec_add, matmul as gpu_matmul_numba
+    from algorithms.gpu.kernels.numba_kernels import matmul_tiled as gpu_matmul_tiled
     from algorithms.gpu.kernels.numba_kernels import numba_cuda_available as _numba_cuda_available
 except Exception:
     gpu_vec_add = None
     gpu_matmul_numba = None
+    gpu_matmul_tiled = None
     _numba_cuda_available = False
 
 try:
@@ -118,6 +175,12 @@ try:
 except Exception:
     gpu_norm = None
     gpu_outer_product = None
+
+try:
+    from algorithms.gpu.graphs.bfs_frontier import bfs_frontier, adj_to_csr as _adj_to_csr
+except Exception:
+    bfs_frontier = None
+    _adj_to_csr = None
 
 GROUPS = {
     "sort": {
@@ -167,8 +230,6 @@ def _make_search_wrappers():
 
 
 def _make_graph_wrappers():
-    import random
-
     def _rand_graph(n, avg_deg=4):
         adj = {i: [] for i in range(n)}
         for u in range(n):
@@ -185,8 +246,6 @@ def _make_graph_wrappers():
 
     def run_dijkstra(data):
         n = max(2, min(5000, len(data)))  # cap: large graphs are very slow in Python
-        import random
-
         adj = {i: [] for i in range(n)}
         for u in range(n):
             for _ in range(3):
@@ -209,9 +268,30 @@ def _make_graph_wrappers():
     return {"bfs": run_bfs, "dijkstra": run_dijkstra, "dfs": run_dfs}
 
 
+def _make_graph_gpu_wrappers():
+    def _rand_csr(n, avg_deg=4):
+        adj = {i: [] for i in range(n)}
+        for u in range(n):
+            for _ in range(avg_deg):
+                v = random.randrange(n)
+                if v != u and v not in adj[u]:
+                    adj[u].append(v)
+        return _adj_to_csr(n, adj)
+
+    def run_bfs_frontier(data):
+        n = max(2, min(5000, len(data)))
+        row_ptr, col_idx = _rand_csr(n)
+        return bfs_frontier(n, row_ptr, col_idx, source=0)
+
+    return {"bfs_frontier": run_bfs_frontier}
+
+
 GROUPS.update({
     "search": {"cpu": _make_search_wrappers(), "gpu": {}},
-    "graphs": {"cpu": _make_graph_wrappers(), "gpu": {}},
+    "graphs": {
+        "cpu": _make_graph_wrappers(),
+        "gpu": _make_graph_gpu_wrappers() if bfs_frontier is not None else {},
+    },
 })
 
 # Additional algorithm groups and wrappers
@@ -237,8 +317,6 @@ from algorithms.cpu.data_structures.queue import Queue
 from algorithms.cpu.data_structures.linked_list import LinkedList
 from algorithms.cpu.data_structures.union_find import UnionFind
 
-import random
-
 
 def _make_dynamic_wrappers():
     def fib_wrap(data):
@@ -256,8 +334,6 @@ def _make_dynamic_wrappers():
 
 
 def _make_string_wrappers():
-    import string
-
     def _make_text(n):
         # deterministic pseudo-random but fast text generator
         n = min(n, 20000)
@@ -290,7 +366,38 @@ def _make_math_wrappers():
         b = sum(data[:len(data)//2] or [1]) + 2
         return gcd(a, b)
 
-    return {"sieve": sieve_wrap, "gcd": gcd_wrap}
+    # CPU numpy primitives — reference baselines for GPU comparison
+    def fft_numpy(data):
+        import numpy as _np
+        return _np.fft.fft(_np.array(data, dtype=_np.float32))
+
+    def prefix_sum_numpy(data):
+        import numpy as _np
+        return _np.cumsum(_np.array(data, dtype=_np.float32))
+
+    def sum_reduce_numpy(data):
+        import numpy as _np
+        return float(_np.sum(_np.array(data, dtype=_np.float32)))
+
+    def max_reduce_numpy(data):
+        import numpy as _np
+        return float(_np.max(_np.array(data, dtype=_np.float32)))
+
+    def matmul_numpy(data):
+        import numpy as _np
+        side = max(2, int(len(data) ** 0.5))
+        A = _np.array(data[:side * side], dtype=_np.float32).reshape(side, side)
+        return A.dot(A)
+
+    return {
+        "sieve": sieve_wrap,
+        "gcd": gcd_wrap,
+        "fft": fft_numpy,
+        "prefix_sum": prefix_sum_numpy,
+        "sum_reduce": sum_reduce_numpy,
+        "max_reduce": max_reduce_numpy,
+        "matmul": matmul_numpy,
+    }
 
 
 def _make_geometry_wrappers():
@@ -441,26 +548,47 @@ GROUPS.update({
 })
 
 
-def _make_sparse_wrappers():
-    def spmv_wrap(data):
-        # build small CSR for n x n tridiagonal-like matrix
-        n = max(2, min(50, len(data) or 4))
-        data_list = []
-        indices = []
-        indptr = [0]
-        for i in range(n):
-            # diagonal
+def _build_tridiag_csr(n):
+    """Return (data, indices, indptr, x) for an n×n tridiagonal CSR matrix."""
+    data_list, indices, indptr = [], [], [0]
+    for i in range(n):
+        data_list.append(1.0)
+        indices.append(i)
+        if i + 1 < n:
             data_list.append(1.0)
-            indices.append(i)
-            # next column
-            if i + 1 < n:
-                data_list.append(1.0)
-                indices.append(i + 1)
-            indptr.append(len(data_list))
-        x = [1.0] * n
-        return gpu_spmv(data_list, indices, indptr, x)
+            indices.append(i + 1)
+        indptr.append(len(data_list))
+    return data_list, indices, indptr, [1.0] * n
 
-    return {"spmv": spmv_wrap}
+
+def _make_sparse_cpu_wrappers():
+    """Pure-CPU (NumPy) CSR SpMV — reference baseline."""
+    import numpy as _np
+
+    def spmv_cpu(data):
+        n = max(2, min(500, len(data) or 4))
+        d, idx, ptr, x = _build_tridiag_csr(n)
+        d_arr = _np.array(d, dtype=_np.float32)
+        idx_arr = _np.array(idx, dtype=_np.int32)
+        ptr_arr = _np.array(ptr, dtype=_np.int32)
+        x_arr = _np.array(x, dtype=_np.float32)
+        out = _np.zeros(n, dtype=_np.float32)
+        for row in range(n):
+            for j in range(ptr_arr[row], ptr_arr[row + 1]):
+                out[row] += d_arr[j] * x_arr[idx_arr[j]]
+        return out
+
+    return {"spmv": spmv_cpu}
+
+
+def _make_sparse_gpu_wrappers():
+    """GPU-accelerated CSR SpMV (falls back to CPU when no GPU is present)."""
+    def spmv_gpu(data):
+        n = max(2, min(500, len(data) or 4))
+        d, idx, ptr, x = _build_tridiag_csr(n)
+        return gpu_spmv(d, idx, ptr, x)
+
+    return {"spmv": spmv_gpu}
 
 
 def _gpu_available():
@@ -567,32 +695,61 @@ def _make_gpu_math_wrappers():
         return gpu_outer_product(_np.array(data[:1000], dtype=_np.float32))
 
     result = {}
-    if gpu_fft: result['fft'] = fft_wrap
-    if gpu_convolve: result['convolve'] = convolve_wrap
-    if gpu_prefix_sum: result['prefix_sum'] = prefix_sum_wrap
-    if gpu_sum_reduce: result['sum_reduce'] = sum_reduce_wrap
-    if gpu_max_reduce: result['max_reduce'] = max_reduce_wrap
-    if gpu_vec_add and _numba_cuda_available: result['vec_add'] = vec_add_wrap
-    if gpu_matmul_numba and _numba_cuda_available: result['matmul_numba'] = matmul_numba_wrap
-    if gpu_matmul_cupy: result['matmul_cupy'] = matmul_cupy_wrap
-    if gpu_min_reduce: result['min_reduce'] = min_reduce_wrap
-    if gpu_mean_reduce: result['mean_reduce'] = mean_reduce_wrap
-    if gpu_dot_product: result['dot_product'] = dot_product_wrap
-    if gpu_diff: result['diff'] = diff_wrap
-    if argsort_gpu: result['argsort'] = argsort_wrap
-    if clip_gpu: result['clip'] = clip_wrap
-    if histogram_gpu: result['histogram'] = histogram_wrap
-    if softmax_gpu: result['softmax'] = softmax_wrap
-    if gpu_norm: result['norm'] = norm_wrap
-    if gpu_outer_product: result['outer_product'] = outer_product_wrap
+    if gpu_fft:
+        result['fft'] = fft_wrap
+    if gpu_convolve:
+        result['convolve'] = convolve_wrap
+    if gpu_prefix_sum:
+        result['prefix_sum'] = prefix_sum_wrap
+    if gpu_sum_reduce:
+        result['sum_reduce'] = sum_reduce_wrap
+    if gpu_max_reduce:
+        result['max_reduce'] = max_reduce_wrap
+    if gpu_vec_add and _numba_cuda_available:
+        result['vec_add'] = vec_add_wrap
+    if gpu_matmul_numba and _numba_cuda_available:
+        result['matmul_numba'] = matmul_numba_wrap
+    if gpu_matmul_cupy:
+        result['matmul_cupy'] = matmul_cupy_wrap
+    if gpu_min_reduce:
+        result['min_reduce'] = min_reduce_wrap
+    if gpu_mean_reduce:
+        result['mean_reduce'] = mean_reduce_wrap
+    if gpu_dot_product:
+        result['dot_product'] = dot_product_wrap
+    if gpu_diff:
+        result['diff'] = diff_wrap
+    if argsort_gpu:
+        result['argsort'] = argsort_wrap
+    if clip_gpu:
+        result['clip'] = clip_wrap
+    if histogram_gpu:
+        result['histogram'] = histogram_wrap
+    if softmax_gpu:
+        result['softmax'] = softmax_wrap
+
+    def matmul_tiled_wrap(data):
+        side = max(2, int(len(data) ** 0.5))
+        A = _np.array(data[:side * side], dtype=_np.float32).reshape(side, side)
+        return gpu_matmul_tiled(A, A)
+
+    if gpu_norm:
+        result['norm'] = norm_wrap
+    if gpu_outer_product:
+        result['outer_product'] = outer_product_wrap
+    if gpu_matmul_tiled and _numba_cuda_available:
+        result['matmul_tiled'] = matmul_tiled_wrap
     return result
 
 if 'math' in GROUPS and _GPU:
     GROUPS['math']['gpu'].update(_make_gpu_math_wrappers())
 
-# add sparse group (uses GPU-aware sparse_ops which falls back to CPU)
+# add sparse group with separate CPU (numpy) and GPU (sparse_ops) backends
 GROUPS.update({
-    'sparse': {'cpu': _make_sparse_wrappers(), 'gpu': {}}
+    'sparse': {
+        'cpu': _make_sparse_cpu_wrappers(),
+        'gpu': _make_sparse_gpu_wrappers() if gpu_spmv is not None else {},
+    }
 })
 
 
@@ -601,9 +758,10 @@ def run_one(func, data, repeat: int, include_memory: bool):
     wrapped(list(data))
     return wrapped.last_metrics
 
-DEFAULT_FIELDNAMES = ["algorithm", "backend", "n", "runs", "min", "max", "mean", "times"]
-SLOW_ALGOS = {"bubble", "insertion", "selection"}  # skip these above 2 000 elements
-SLOW_ALGOS_MAX_N = 2000
+DEFAULT_FIELDNAMES = ["algorithm", "backend", "n", "runs", "min", "max", "mean", "p50", "p95", "times"]
+SLOW_ALGOS = {}  # Empty set: run all algorithms at all sizes (no skipping)
+# WARNING: bubble/insertion/selection are O(n²) and running them at n=100000 will be extremely slow!
+SLOW_ALGOS_MAX_N = 100000
 
 
 def merge(inputs_glob, out_path):
@@ -723,22 +881,15 @@ def main():
             writer.writerow(row)
 
     if args.plot:
-        try:
-            import matplotlib.pyplot as plt
-            import pandas as pd
-
-            df = pd.read_csv(out_path)
-            df["mean"] = pd.to_numeric(df["mean"])
-            df = df.pivot_table(index="n", columns=["algorithm", "backend"], values="mean")
-            ax = df.plot(logx=True)
-            ax.set_xlabel("n")
-            ax.set_ylabel("mean time (s)")
-            fig_path = out_path.parent / "benchmark_plot.png"
-            plt.savefig(fig_path)
-            print("Plot saved to", fig_path)
-        except Exception as e:
-            print("Plotting failed:", e)
+        print("PNG saving has been disabled. Use the Dash dashboard for visualization.")
 
 
 if __name__ == "__main__":
+    if not _acquire_lock():
+        print(
+            f"[run_benchmarks] Another instance is already running "
+            f"(lock: {_LOCK_PATH}). Exiting.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     main()

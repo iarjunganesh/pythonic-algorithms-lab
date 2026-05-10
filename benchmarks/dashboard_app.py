@@ -66,18 +66,25 @@ def build_app(df: pd.DataFrame):
 
     # appearance control removed; dashboard defaults to light mode
 
-    # Build layout: header (title + appearance), selectors, scales, plot type, then graph
+    # Build layout: header, selectors, tabs (Timing | Speedup)
     app.layout = html.Div([
         html.Div([
             html.H3("Pythonic-Algorithms Benchmarks", id="heading", style={"marginBottom": "6px"}),
         ], style={"display": "flex", "justifyContent": "space-between", "alignItems": "center"}),
 
-        html.Div([left_col, right_col], style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "marginTop": "8px"}),
-
-        # plot_type UI removed; plot defaults to line with bands
-
-        # Graph area
-        html.Div([dcc.Graph(id="graph", style={"width": "100%"})], style={"marginTop": "12px"}),
+        dcc.Tabs(id="tabs", value="timing", children=[
+            dcc.Tab(label="Timing", value="timing", children=[
+                html.Div([left_col, right_col], style={"display": "flex", "justifyContent": "space-between", "gap": "12px", "marginTop": "8px"}),
+                html.Div([dcc.Graph(id="graph", style={"width": "100%"})], style={"marginTop": "12px"}),
+            ]),
+            dcc.Tab(label="CPU vs GPU Speedup", value="speedup", children=[
+                html.Div([
+                    html.P("Speedup = cpu_mean / gpu_mean per algorithm and input size. Values > 1 mean GPU is faster.",
+                           style={"marginTop": "12px", "color": "#555"}),
+                    dcc.Graph(id="speedup-graph", style={"width": "100%"}),
+                ], style={"marginTop": "8px"}),
+            ]),
+        ]),
 
     ], id="page-container", className="light", style={"backgroundColor": "#ffffff", "color": "#000000", "padding": "12px"})
 
@@ -253,6 +260,55 @@ def build_app(df: pd.DataFrame):
         fig.update_xaxes(title_text="n", title_font=dict(size=16), tickfont=dict(size=12), type=("log" if x_scale == "log" else "linear"))
         fig.update_yaxes(title_text="mean time (s)", title_font=dict(size=16), tickfont=dict(size=12), type=("log" if y_scale == "log" else "linear"))
         return mkout(fig)
+
+    @app.callback(
+        Output("speedup-graph", "figure"),
+        Input("tabs", "value"),
+    )
+    def update_speedup(tab):
+        if tab != "speedup":
+            return go.Figure()
+        d = df.copy()
+        d["n"] = pd.to_numeric(d["n"], errors="coerce")
+        d["mean"] = pd.to_numeric(d["mean"], errors="coerce")
+        d = d.dropna(subset=["n", "mean"])
+
+        def _canonical(name):
+            for suffix in ("_numpy", "_cupy", "_numba", "_tiled"):
+                if name.endswith(suffix):
+                    return name[: -len(suffix)]
+            return {"bfs_frontier": "bfs"}.get(name, name)
+
+        d["_key"] = d["algorithm"].apply(_canonical)
+        cpu = d[d["backend"] == "cpu"][["_key", "n", "mean"]].rename(columns={"mean": "cpu_mean"})
+        gpu = d[d["backend"] == "gpu"][["_key", "n", "mean"]].rename(columns={"mean": "gpu_mean"})
+        merged = pd.merge(cpu, gpu, on=["_key", "n"])
+        if merged.empty:
+            fig = go.Figure()
+            fig.update_layout(title="No paired CPU/GPU data found", template="plotly")
+            return fig
+        merged["speedup"] = merged["cpu_mean"] / merged["gpu_mean"]
+        merged = merged.sort_values(["_key", "n"])
+        fig = px.line(
+            merged,
+            x="n",
+            y="speedup",
+            color="_key",
+            markers=True,
+            log_x=True,
+            title="GPU Speedup over CPU (cpu_mean / gpu_mean)",
+            labels={"speedup": "Speedup (×)", "n": "Input size n", "_key": "algorithm"},
+        )
+        fig.add_hline(y=1.0, line_dash="dash", line_color="gray", annotation_text="break-even")
+        fig.update_layout(
+            height=700,
+            width=1200,
+            font=dict(size=14),
+            margin=dict(l=70, r=30, t=70, b=80),
+            legend=dict(orientation="h", y=-0.12, x=0.5, xanchor="center", yanchor="top"),
+            template="plotly",
+        )
+        return fig
 
     return app
 

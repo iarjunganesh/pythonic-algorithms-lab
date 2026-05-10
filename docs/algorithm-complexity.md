@@ -19,6 +19,24 @@ Big-O time and space complexities for every algorithm implemented in this reposi
 
 *k = range of values, d = number of digits*
 
+### Empirical Benchmarks (May 2026, Python 3.14, RTX 5070)
+
+Run with 354 measurements across n ∈ [100, 1000, 5000, 10000, 50000, 100000]:
+
+| Algorithm | n=100k (Python) | Notes |
+|---|---|---|
+| Bubble | 289 s | Pure O(n²); validates theory |
+| Insertion | 123 s | O(n²) interpreter overhead |
+| Selection | 118 s | O(n²) interpreter overhead |
+| Shell | 0.293 s | O(n log² n) theory; function call overhead dominates |
+| Merge | 0.039 s | O(n log n); highly efficient |
+| Quick | 0.034 s | O(n log n) average; Timsort (Python native) is fastest |
+| Timsort | 0.009 s | O(n log n); adaptive; native implementation |
+| Counting | 0.083 s | O(n) range-aware; was hidden O(1M) in naive wrapper |
+| Radix | 0.121 s | O(dn + k); slower due to digit decomposition overhead |
+
+**Key insight**: Complexity class alone doesn't predict Python runtime. Function call overhead in pure Python is significant. Shell sort's O(n log² n) underperforms O(n log n) algorithms.
+
 ## Searching
 
 | Algorithm | Best | Average | Worst | Space | Notes |

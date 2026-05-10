@@ -38,7 +38,7 @@ def test_rabin_karp_found():
 
 
 def test_rabin_karp_not_found():
-    assert rabin_karp(text := "hello world", "xyz") == -1
+    assert rabin_karp("hello world", "xyz") == -1
 
 
 def test_rabin_karp_matches_kmp():
