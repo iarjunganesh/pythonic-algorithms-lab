@@ -2,9 +2,21 @@
 
 ![CI](https://github.com/iarjunganesh/pythonic-algorithms-lab/actions/workflows/ci.yml/badge.svg)
 ![Python](https://img.shields.io/badge/python-3.14-blue)
-![Tests](https://img.shields.io/badge/tests-118%20passing-brightgreen)
+![Tests](https://img.shields.io/github/actions/workflow/status/iarjunganesh/pythonic-algorithms-lab/ci.yml?label=tests&branch=main)
 
 Comprehensive laboratory for algorithm implementations, Big-O exploration, and CPU vs GPU benchmarking.
+
+## Why this repo is different
+
+Most algorithm repositories are reference collections — code you read, not code you measure. This one is different in three ways.
+
+**Every algorithm is benchmarked, not just implemented.** The built-in benchmark runner (`benchmarks/run_benchmarks.py`) measures wall-clock time across configurable input sizes and exports CSV results. Every number in the Key Findings table below is reproducible on your own hardware with a single command.
+
+**GPU kernels ship alongside CPU implementations — with automatic fallbacks.** The `algorithms/gpu/` tree contains CuPy and Numba CUDA implementations of sorting, FFT, convolution, sparse matrix-vector multiply, BFS frontier expansion, prefix scan, and reduction. Every GPU path falls back to NumPy/SciPy when no CUDA device is present, so the full test suite passes on CPU-only machines out of the box.
+
+**An interactive Dash dashboard visualises your data, not a screenshot.** `benchmarks/dashboard_app.py` renders a live CPU vs GPU speedup chart, empirical Big-O curves, and per-algorithm breakdown — driven by your own benchmark CSV. The **16.6× GPU speedup on Radix sort at n = 100k** is the headline result, but the dashboard shows *why*: sustained superlinear scaling with array size, not a one-off win at a cherry-picked n.
+
+Almost no Python algorithm repos benchmark anything. Fewer still run on the GPU. This one does both.
 
 ## Repository layout
 
