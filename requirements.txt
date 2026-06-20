@@ -4,8 +4,8 @@ numpy>=1.23
 matplotlib>=3.5
 pandas>=1.5
 pytest>=7.0
-plotly
-dash
+plotly>=5.0
+dash>=2.0
 ruff>=0.4
 
 # GPU dependencies (optional)
