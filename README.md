@@ -14,7 +14,7 @@ Most algorithm repositories are reference collections — code you read, not cod
 
 **GPU kernels ship alongside CPU implementations — with automatic fallbacks.** The `algorithms/gpu/` tree contains CuPy and Numba CUDA implementations of sorting, FFT, convolution, sparse matrix-vector multiply, BFS frontier expansion, prefix scan, and reduction. Every GPU path falls back to NumPy/SciPy when no CUDA device is present, so the full test suite passes on CPU-only machines out of the box.
 
-**An interactive Dash dashboard visualises your data, not a screenshot.** `benchmarks/dashboard_app.py` renders a live CPU vs GPU speedup chart, empirical Big-O curves, and per-algorithm breakdown — driven by your own benchmark CSV. The **16.6× GPU speedup on Radix sort at n = 100k** is the headline result, but the dashboard shows *why*: sustained superlinear scaling with array size, not a one-off win at a cherry-picked n.
+**An interactive Dash dashboard visualises your data, not a screenshot.** `benchmarks/dashboard_app.py` renders a live CPU vs GPU speedup chart, empirical Big-O curves, and per-algorithm breakdown — driven by your own benchmark CSV. A speedup is only as honest as its CPU baseline, so the GPU sort is reported against both a pure-Python radix sort and NumPy's vectorised `np.sort`: it beats the first by 16.6× at n = 100k, beats the second by an estimated 1.2–1.5×, and loses to `np.sort` below n ≈ 50k. See [Key findings](#key-findings).
 
 Almost no Python algorithm repos benchmark anything. Fewer still run on the GPU. This one does both.
 
@@ -154,11 +154,12 @@ python benchmarks/dashboard_app.py --csv benchmarks/results_full.csv
 
 ## Key findings
 
-Measured on this machine (CPU-only fallback paths where no GPU is available). Run your own sweep to get GPU numbers.
+Measured on an RTX 5070 Laptop GPU (May 2026, 5 runs per size). Speedup = CPU mean ÷ GPU mean, against this repo's own CPU implementation of the same operation. Run your own sweep to get numbers for your hardware.
 
 | Algorithm | GPU wins at n ≈ | Peak speedup (n=100k) | Note |
 |---|---|---|---|
-| Radix sort (CuPy) | 1 000 | **16.6×** | Monotonically improves with n |
+| Sort (CuPy) vs NumPy `np.sort` | ≈ 50 000 | **≈ 1.2–1.5×** (est.) | The fair baseline; CPU wins below ~50k |
+| Sort (CuPy) vs pure-Python radix | 1 000 | 16.6× | Mostly measures the Python interpreter; see below |
 | SpMV CSR | 1 000 | **1.1×** | Stable; transfer overhead limits gain |
 | FFT | 100 000 | **1.3×** | GPU slower than NumPy below n=50k |
 | matmul | 100 000 | **1.0×** | Break-even; tiled kernel needed for dense gains |
@@ -166,7 +167,14 @@ Measured on this machine (CPU-only fallback paths where no GPU is available). Ru
 | max/sum reduce | never (at these sizes) | 0.9× | NumPy BLAS baseline is hard to beat |
 
 > FFT anomaly at n=5 000 (0.16× = 6× slower): CuPy warmup + PCIe transfer overhead dominates small arrays.
-> Radix is the portfolio headline: sustained superlinear scaling on GPU.
+
+### What the 16.6× radix figure does and doesn't show
+
+`radix_cupy` wraps CuPy's built-in `cp.sort`, a vendor-tuned GPU sort, not a hand-written kernel; its timing includes the host→device copy and the copy back. Its CPU pair in the speedup chart is `radix`, an LSD radix sort written in pure Python. At n = 100k the GPU path took 2.53 ms and the pure-Python sort 42.1 ms, hence 16.6×. Most of that gap is interpreter overhead, not hardware.
+
+The fair CPU baseline is `numpy_sort`: `np.sort`, given the same Python list, so list→array conversion is timed on both sides. It was added after the GPU sweep and the GPU side has not been re-run with it yet, so the GPU-vs-`np.sort` figure is an estimate. Across three runs at n = 100k, `np.sort` measured 11–14× faster than the pure-Python radix sort, and 16.6 ÷ (11–14) ≈ 1.2–1.5×. The same method puts the crossover near n = 50k; at n = 10k, `np.sort` is faster than the GPU path. A full sweep including `numpy_sort` will replace the estimate.
+
+The speedup grows with n because the GPU's fixed cost (kernel launch and PCIe transfer) is spread over more elements, not because of superlinear scaling; both sides scale close to linearly in this range.
 
 Generate the interactive speedup chart:
 ```powershell

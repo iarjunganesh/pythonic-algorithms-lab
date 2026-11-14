@@ -610,9 +610,22 @@ def _gpu_available():
         return False
 
 
+def numpy_sort(data):
+    """Vectorised CPU baseline for the GPU sorts.
+
+    Same contract as radix_cupy: takes a Python list, so the list->array
+    conversion is timed on both sides. Without this row, the only CPU sorts are
+    pure-Python loops and sorted(), and a CPU-vs-GPU speedup measures the
+    interpreter rather than the hardware.
+    """
+    import numpy as np
+    return np.sort(np.asarray(data))
+
+
 # Register additional CPU sorts and optional GPU kernels when available
 _GPU = _gpu_available()
 GROUPS['sort']['cpu'].update({
+    'numpy_sort': numpy_sort,
     'insertion': insertion_sort,
     'selection': selection_sort,
     'shell': shell_sort,
