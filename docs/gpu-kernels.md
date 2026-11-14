@@ -146,7 +146,7 @@ The runner only registers GPU-backed implementations when a compatible GPU toolc
 ### Key Findings
 
 - **O(n²) Pure Python Impact**: Bubble sort clocked 289 seconds at n=100,000; insertion (123s) and selection (118s) demonstrate the exponential cost. This validates Big-O theory in practice.
-- **GPU Crossover**: CuPy-based GPU sorts beat CPU timsort around n=10,000; below that, CPU dominates due to kernel launch overhead (~0.15ms floor).
+- **GPU Crossover**: CuPy-based GPU sorts beat Python's built-in `sorted()` (Timsort) around n=10,000; below that, CPU dominates due to kernel launch overhead (~0.15ms floor). Against NumPy's vectorised `np.sort` the crossover moves out to roughly n=50,000, with an estimated 1.2–1.5× GPU advantage at n=100,000 (see "What the 16.6× radix figure does and doesn't show" in the README).
 - **Warmup Matters**: GPU kernels exhibit high first-call latency (22ms) due to driver initialization. Post-warmup: 0.3ms. Without warmup, small-n measurements are skewed 70×.
 - **Implementation Bugs Hide in Benchmarks**: Counting sort wrapper with fixed O(1M) bucket range appeared O(1) instead of O(n). Real data-aware ranges exposed linear scaling.
 - **Numba CUDA on Windows**: Falls back to NumPy CPU under WDDM drivers; TCC mode required for actual GPU execution.
